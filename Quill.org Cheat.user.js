@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Quill.org Cheat
 // @namespace    http://tampermonkey.net/
-// @version      1.1.0
+// @version      1.3.0
 // @description  Get answers for Quill.org, with quiz timer and auto-answer
 // @author       Potassium_
 // @match        https://www.quill.org/*
@@ -14,12 +14,53 @@
 (function () {
     "use strict";
 
+    const SETTINGS_KEY = "quill-cheat-settings";
+    const DEFAULT_SETTINGS = { answerDelayMin: 0, answerDelayMax: 0, alwaysActive: false };
+
+    function loadSettings() {
+      try {
+        return Object.assign({}, DEFAULT_SETTINGS, JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"));
+      } catch (error) {
+        return Object.assign({}, DEFAULT_SETTINGS);
+      }
+    }
+
+    function saveSettings() {
+      try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+      } catch (error) {
+        // localStorage may be unavailable — settings just won't persist
+      }
+    }
+
+    function clampSeconds(value) {
+      const n = parseFloat(value);
+      if (isNaN(n) || n < 0) return 0;
+      return Math.min(3600, Math.floor(n));
+    }
+
+    function sampleDelayMs() {
+      const min = Math.max(0, Number(settings.answerDelayMin) || 0);
+      const max = Math.max(min, Number(settings.answerDelayMax) || 0);
+      if (max <= 0) return 0;
+      return Math.floor((min + Math.random() * (max - min)) * 1000);
+    }
+
+    let settings = loadSettings();
+
     let answersPanel = null;
     let currentQuestionKey = null;
     let lessonQuestions = [];
     let currentResponses = [];
     let quizStartTime = Date.now();
     let questionStartTime = Date.now();
+    let currentQuestionDelayMs = 0;
+    let autoPilotInterval = null;
+    let autoPilotEnabled = false;
+    let autoPilotAttempts = 0;
+    let lastAutoPilotQuestionIndex = null;
+    let alwaysActiveInterval = null;
+    let forgeryListeners = [];
 
     function injectStyles() {
       const styles = document.createElement("style");
@@ -150,6 +191,98 @@
         .quill-cheat-autobutton:hover {
           background: #057360;
         }
+        .quill-cheat-autopilot {
+          background: #f0f0f0;
+          color: #057360;
+          border: 1px solid #06806b;
+          border-radius: 6px;
+          padding: 4px 10px;
+          font-size: 12px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+        .quill-cheat-autopilot:hover {
+          background: #e4f5f2;
+        }
+        .quill-cheat-autopilot.active {
+          background: #06806b;
+          color: #ffffff;
+          border-color: #057360;
+          box-shadow: 0 0 0 2px rgba(6, 128, 107, 0.3);
+        }
+        .quill-cheat-gear {
+          background: #f0f0f0;
+          color: #057360;
+          border: 1px solid #06806b;
+          border-radius: 6px;
+          padding: 4px 9px;
+          font-size: 13px;
+          line-height: 1;
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+        .quill-cheat-gear:hover {
+          background: #e4f5f2;
+        }
+        .quill-cheat-settings {
+          display: none;
+          padding: 12px 16px;
+          background: #ffffff;
+          border-top: 1px solid #06806b;
+          border-radius: 0 0 10px 10px;
+          font-size: 12px;
+          font-weight: 600;
+          color: #057360;
+        }
+        .quill-cheat-settings-title {
+          font-size: 12px;
+          font-weight: 800;
+          color: #06806b;
+          margin-bottom: 8px;
+        }
+        .quill-cheat-setting-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 10px;
+          margin: 7px 0;
+        }
+        .quill-cheat-setting-row.checkbox-row {
+          cursor: pointer;
+          user-select: none;
+        }
+        .quill-cheat-setting-input {
+          width: 68px;
+          padding: 4px 8px;
+          border: 1px solid #06806b;
+          border-radius: 6px;
+          font-size: 12px;
+          font-weight: 600;
+          color: #000000;
+          text-align: right;
+        }
+        .quill-cheat-settings-note {
+          font-size: 11px;
+          font-weight: 400;
+          color: #888;
+          margin-top: 6px;
+          line-height: 1.35;
+        }
+        .quill-cheat-settings-reset {
+          background: none;
+          border: 1px solid #06806b;
+          color: #057360;
+          padding: 4px 10px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 11px;
+          font-weight: 700;
+          margin-top: 8px;
+        }
+        .quill-cheat-settings-reset:hover {
+          background: #e4f5f2;
+        }
         .quill-cheat-timer-bar {
           display: flex;
           justify-content: space-between;
@@ -181,7 +314,9 @@
         <div class="quill-cheat-header">
           <span class="quill-cheat-title">Quill Answers</span>
           <div class="quill-cheat-header-actions">
-            <button type="button" class="quill-cheat-autobutton" title="Insert the best answer and submit it automatically">&#9889; Auto</button>
+            <button type="button" class="quill-cheat-autobutton" title="Insert the best answer and submit it once">&#9889; Auto</button>
+            <button type="button" class="quill-cheat-autopilot" id="quill-cheat-autopilot" title="Auto-pilot — answers every question and clicks Next until the end of the lesson">&#129302; Loop</button>
+            <button type="button" class="quill-cheat-gear" id="quill-cheat-gear" title="Loop settings">&#9881;</button>
             <span class="quill-cheat-toggle">&#9650;</span>
           </div>
         </div>
@@ -192,6 +327,23 @@
           <span>Quiz time: <span class="timer-value quiz-elapsed">0:00</span></span>
           <span>Question time: <span class="timer-value question-elapsed">0:00</span></span>
         </div>
+        <div class="quill-cheat-settings" id="quill-cheat-settings">
+          <div class="quill-cheat-settings-title">Loop settings</div>
+          <label class="quill-cheat-setting-row">
+            <span>Time on question min (s)</span>
+            <input type="number" min="0" max="3600" step="1" class="quill-cheat-setting-input" id="quill-cheat-delay-min" title="Minimum seconds the loop waits on each question before answering">
+          </label>
+          <label class="quill-cheat-setting-row">
+            <span>Time on question max (s)</span>
+            <input type="number" min="0" max="3600" step="1" class="quill-cheat-setting-input" id="quill-cheat-delay-max" title="Maximum seconds the loop waits on each question before answering (a random time between min and max is picked per question)">
+          </label>
+          <label class="quill-cheat-setting-row checkbox-row">
+            <span>Always-active window</span>
+            <input type="checkbox" id="quill-cheat-always-active">
+          </label>
+          <div class="quill-cheat-settings-note">Makes Quill's JavaScript think the tab is always visible and focused, and sends periodic mouse movement so idle detection doesn't kick in. Quill also reports real wall-clock time to your teacher, so pair this with a time-on-question setting for a natural look.</div>
+          <button type="button" class="quill-cheat-settings-reset" id="quill-cheat-settings-reset">Reset defaults</button>
+        </div>
       `;
 
       answersPanel.querySelector(".quill-cheat-header").addEventListener("click", () => {
@@ -201,6 +353,50 @@
       answersPanel.querySelector(".quill-cheat-autobutton").addEventListener("click", (event) => {
         event.stopPropagation();
         autoAnswer();
+      });
+
+      answersPanel.querySelector(".quill-cheat-autopilot").addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleAutoPilot();
+      });
+
+      const settingsPanel = answersPanel.querySelector("#quill-cheat-settings");
+      const delayMinInput = answersPanel.querySelector("#quill-cheat-delay-min");
+      const delayMaxInput = answersPanel.querySelector("#quill-cheat-delay-max");
+      const alwaysActiveInput = answersPanel.querySelector("#quill-cheat-always-active");
+
+      answersPanel.querySelector("#quill-cheat-gear").addEventListener("click", (event) => {
+        event.stopPropagation();
+        settingsPanel.style.display = settingsPanel.style.display === "block" ? "none" : "block";
+      });
+
+      delayMinInput.value = settings.answerDelayMin;
+      delayMaxInput.value = settings.answerDelayMax;
+      alwaysActiveInput.checked = settings.alwaysActive;
+
+      delayMinInput.addEventListener("input", () => {
+        settings.answerDelayMin = clampSeconds(delayMinInput.value);
+        saveSettings();
+      });
+      delayMaxInput.addEventListener("input", () => {
+        settings.answerDelayMax = clampSeconds(delayMaxInput.value);
+        saveSettings();
+      });
+      alwaysActiveInput.addEventListener("change", () => {
+        settings.alwaysActive = alwaysActiveInput.checked;
+        saveSettings();
+        syncAlwaysActive();
+      });
+
+      answersPanel.querySelector("#quill-cheat-settings-reset").addEventListener("click", (event) => {
+        event.stopPropagation();
+        settings = Object.assign({}, DEFAULT_SETTINGS);
+        saveSettings();
+        delayMinInput.value = settings.answerDelayMin;
+        delayMaxInput.value = settings.answerDelayMax;
+        alwaysActiveInput.checked = settings.alwaysActive;
+        syncAlwaysActive();
+        showToast("Settings reset to defaults");
       });
 
       document.body.appendChild(answersPanel);
@@ -229,11 +425,14 @@
     }
 
     function isLessonComplete() {
+      const url = window.location.href;
+      if (url.includes("activity_sessions")) return true;
       const hash = window.location.hash;
       if (hash.includes("/results") || hash.includes("/complete")) return true;
       const allText = document.body.innerText || "";
       if (allText.includes("You've completed the lesson")) return true;
       if (allText.includes("Your results are being saved")) return true;
+      if (allText.includes("Activity Complete")) return true;
       return false;
     }
 
@@ -241,11 +440,24 @@
       try {
         const url = `https://cms.quill.org/questions/${questionKey}/responses`;
         const response = await fetch(url);
-        const data = await response.json();
+        let data = await response.json();
 
-        if (!Array.isArray(data) || data.length === 0) return [];
+        if (!Array.isArray(data)) data = [];
+        let withText = data.filter((r) => r.text && r.text.trim());
 
-        const withText = data.filter((r) => r.text && r.text.trim());
+        // Fall back to multiple choice options when there are no text responses
+        if (withText.length === 0) {
+          try {
+            const mcResponse = await fetch(`https://cms.quill.org/questions/${questionKey}/multiple_choice_options`);
+            const mcData = await mcResponse.json();
+            if (Array.isArray(mcData)) {
+              withText = mcData.filter((r) => r.text && r.text.trim());
+            }
+          } catch (mcError) {
+            console.error("Quill Cheat: Error fetching MC options:", mcError);
+          }
+        }
+
         if (withText.length === 0) return [];
 
         const sorted = withText.sort((a, b) => {
@@ -358,8 +570,24 @@
           if (tracker) tracker.setValue("");
           input.dispatchEvent(new Event("input", { bubbles: true }));
         } else if (input.isContentEditable) {
-          input.textContent = text;
+          // Quill's answer box is a contenteditable that React reads via the
+          // native `beforeinput`/`input` events produced by a real insertion.
+          // Replacing textContent directly leaves React's state empty and the
+          // submit button stays disabled — use execCommand instead.
+          input.focus();
+          const selection = window.getSelection();
+          if (selection) {
+            const range = document.createRange();
+            range.selectNodeContents(input);
+            selection.removeAllRanges();
+            selection.addRange(range);
+          }
+          const inserted = document.execCommand("insertText", false, text);
+          if (!inserted) {
+            input.textContent = text;
+          }
           input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
         }
 
         return;
@@ -415,17 +643,26 @@
     }
 
     function findSubmitButton() {
-      const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
-      const submit = buttons.find((el) => {
-        if (el.disabled) return false;
+      const candidates = Array.from(document.querySelectorAll('button, [role="button"]'));
+      const visible = candidates.filter((el) => {
         const rect = el.getBoundingClientRect();
         const text = (el.textContent || "").trim();
+        const className = (el.className || "").toString();
         const type = (el.getAttribute("type") || "").toLowerCase();
-        const isSubmitType = type === "submit";
-        const looksLikeSubmit = /submit|check|grade|save/i.test(text);
-        return rect.width > 0 && rect.height > 0 && text.length > 0 && text.length < 200 && (isSubmitType || looksLikeSubmit);
+
+        if (rect.width <= 0 || rect.height <= 0 || !text || text.length >= 200) return false;
+        if (el.disabled) return false;
+        // Quill disables buttons via a "disabled" class rather than the attribute
+        if (/\bdisabled\b/i.test(className)) return false;
+
+        return type === "submit" || /submit|check|grade|save|feedback|continue|next/i.test(text);
       });
-      return submit || null;
+
+      // Prefer real submit actions over "Next"/"Continue" navigation
+      const preferred = visible.find((el) =>
+        /get feedback|feedback|submit|check|grade|save/i.test((el.textContent || "").trim())
+      );
+      return preferred || visible[0] || null;
     }
 
     function submitAnswer() {
@@ -456,10 +693,219 @@
 
       const best = responses[0];
       insertAnswer(best.text);
-      const submitted = submitAnswer();
 
-      if (submitted) {
-        showToast("⚡ Auto-answer submitted!");
+      // Give React a tick to enable the submit/feedback button after our input events
+      setTimeout(() => {
+        const submitted = submitAnswer();
+        if (submitted) {
+          showToast("⚡ Auto-answer submitted!");
+        } else {
+          showToast("⚡ Answer inserted — press Get feedback");
+        }
+      }, 150);
+    }
+
+    function installFocusForgeries() {
+      // Pages can only detect focus/visibility through JS APIs — override them so
+      // the page always believes the tab is visible and focused.
+      try {
+        Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+        Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+        document.hasFocus = () => true;
+      } catch (error) {
+        console.error("Quill Cheat: Could not override document visibility:", error);
+      }
+    }
+
+    function enableAlwaysActive() {
+      installFocusForgeries();
+      if (alwaysActiveInterval) return;
+
+      // Block blur/visibility signals in the capture phase so page handlers never see them
+      const swallow = (event) => event.stopImmediatePropagation();
+      ["visibilitychange", "webkitvisibilitychange", "blur", "focusout", "pagehide"].forEach((type) => {
+        [window, document].forEach((target) => {
+          target.addEventListener(type, swallow, true);
+          forgeryListeners.push([target, type, swallow]);
+        });
+      });
+
+      // Periodic synthetic mouse movement so input-idle detectors never flag inactivity
+      alwaysActiveInterval = setInterval(() => {
+        const event = new MouseEvent("mousemove", {
+          clientX: Math.floor(Math.random() * Math.max(1, window.innerWidth)),
+          clientY: Math.floor(Math.random() * Math.max(1, window.innerHeight)),
+          bubbles: true,
+          cancelable: true,
+          view: window
+        });
+        document.dispatchEvent(event);
+      }, 15000);
+    }
+
+    function disableAlwaysActive() {
+      forgeryListeners.forEach(([target, type, listener]) => {
+        target.removeEventListener(type, listener, true);
+      });
+      forgeryListeners = [];
+      if (alwaysActiveInterval) clearInterval(alwaysActiveInterval);
+      alwaysActiveInterval = null;
+    }
+
+    function syncAlwaysActive() {
+      if (settings.alwaysActive) {
+        enableAlwaysActive();
+      } else {
+        disableAlwaysActive();
+      }
+    }
+
+    const AUTO_PILOT_NEVER_CLICK = /save|exit|skip to main|menu|sign ?(in|out)|log ?(in|out)|teacher/i;
+    const AUTO_PILOT_ADVANCE = /^(next|continue|begin|start activity|start lesson|got it|move on|see results|view results|finish|complete)(\b.*)?$/i;
+
+    function findAdvanceButton() {
+      const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+      for (const el of buttons) {
+        const rect = el.getBoundingClientRect();
+        const text = (el.textContent || "").trim();
+        const className = (el.className || "").toString();
+        const type = (el.getAttribute("type") || "").toLowerCase();
+
+        if (rect.width <= 0 || rect.height <= 0 || !text || text.length >= 200) continue;
+        if (el.disabled) continue;
+        if (/\bdisabled\b/i.test(className)) continue;
+        if (AUTO_PILOT_NEVER_CLICK.test(text)) continue;
+        if (type === "submit" || AUTO_PILOT_ADVANCE.test(text)) return el;
+      }
+      return null;
+    }
+
+    function updateAutoPilotButtonUI() {
+      const btn = answersPanel?.querySelector(".quill-cheat-autopilot");
+      if (btn) btn.classList.toggle("active", autoPilotEnabled);
+    }
+
+    function startAutoPilot() {
+      if (autoPilotInterval) return;
+      autoPilotEnabled = true;
+      autoPilotAttempts = 0;
+      lastAutoPilotQuestionIndex = null;
+      updateAutoPilotButtonUI();
+      showToast("🤖 Auto-pilot ON — answering questions and advancing");
+      autoPilotInterval = setInterval(autoPilotTick, 900);
+      autoPilotTick();
+    }
+
+    function stopAutoPilot(reason) {
+      if (autoPilotInterval) clearInterval(autoPilotInterval);
+      autoPilotInterval = null;
+      autoPilotEnabled = false;
+      updateAutoPilotButtonUI();
+      showToast(reason ? `🤖 Auto-pilot off — ${reason}` : "🤖 Auto-pilot OFF");
+    }
+
+    function toggleAutoPilot() {
+      if (autoPilotEnabled) {
+        stopAutoPilot();
+      } else {
+        startAutoPilot();
+      }
+    }
+
+    function autoPilotTick() {
+      if (isLessonComplete()) {
+        stopAutoPilot("lesson complete 🎉");
+        return;
+      }
+
+      const questionIndex = getQuestionNumberFromPage();
+      if (questionIndex !== lastAutoPilotQuestionIndex) {
+        lastAutoPilotQuestionIndex = questionIndex;
+        autoPilotAttempts = 0;
+        currentQuestionDelayMs = sampleDelayMs();
+      }
+
+      const input = findInputField();
+
+      if (input) {
+        // Wait the configured "time on question" before answering (min–max, randomized per question)
+        if (Date.now() - questionStartTime < currentQuestionDelayMs) return;
+
+        autoPilotAttempts += 1;
+        if (autoPilotAttempts > 30) {
+          stopAutoPilot("stuck on this question");
+          return;
+        }
+
+        const best = currentResponses && currentResponses[0] ? currentResponses[0] : null;
+        if (!best) {
+          stopAutoPilot("no answers available for this question");
+          return;
+        }
+
+        const bestText = best.text.trim().toLowerCase();
+        const currentText = (
+          input.tagName === "TEXTAREA" || input.tagName === "INPUT"
+            ? input.value
+            : (input.textContent || "")
+        ).trim().toLowerCase();
+
+        if (currentText === bestText) {
+          submitAnswer();
+          return;
+        }
+
+        insertAnswer(best.text);
+        setTimeout(() => {
+          if (autoPilotEnabled) submitAnswer();
+        }, 150);
+        return;
+      }
+
+      // No text box — could be a multiple choice question
+      const best = currentResponses && currentResponses[0] ? currentResponses[0] : null;
+      if (best) {
+        // Same "time on question" delay applies to multiple choice questions
+        if (Date.now() - questionStartTime < currentQuestionDelayMs) return;
+
+        const bestLower = best.text.trim().toLowerCase();
+        const mcButtons = findMultipleChoiceButtons();
+        const match = mcButtons.find((btn) => {
+          const btnLower = btn.textContent.trim().toLowerCase();
+          if (btnLower === bestLower) return true;
+          if (bestLower.length >= 20 && btnLower.includes(bestLower)) return true;
+          if (btnLower.length >= 20 && bestLower.includes(btnLower)) return true;
+          return false;
+        });
+        if (match) {
+          autoPilotAttempts += 1;
+          if (autoPilotAttempts > 30) {
+            stopAutoPilot("stuck on this question");
+            return;
+          }
+          match.click();
+          setTimeout(() => {
+            if (autoPilotEnabled) submitAnswer();
+          }, 150);
+          return;
+        }
+      }
+
+      const advance = findAdvanceButton();
+      if (advance) {
+        autoPilotAttempts += 1;
+        if (autoPilotAttempts > 40) {
+          stopAutoPilot("stuck advancing");
+          return;
+        }
+        advance.click();
+        return;
+      }
+
+      // Nothing to act on this tick — count it anyway so we can't idle forever
+      autoPilotAttempts += 1;
+      if (autoPilotAttempts > 45) {
+        stopAutoPilot("no action possible");
       }
     }
 
@@ -494,6 +940,7 @@
       currentQuestionKey = questionKey;
       currentResponses = [];
       questionStartTime = Date.now();
+      currentQuestionDelayMs = sampleDelayMs();
 
       const body = answersPanel?.querySelector(".quill-cheat-body");
       if (body) body.innerHTML = '<div class="quill-cheat-loading">Loading answers...</div>';
@@ -544,6 +991,7 @@
 
     function init() {
       injectStyles();
+      syncAlwaysActive();
       createPanel();
       loadLesson();
       watchUrlChange();
