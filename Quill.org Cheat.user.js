@@ -7,8 +7,8 @@
 // @match        https://www.quill.org/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=quill.org
 // @grant        none
-// @updateURL    https://github.com/ImPotassium/quill-cheat/raw/main/Quill.org%20Cheat.user.js
-// @downloadURL  https://github.com/ImPotassium/quill-cheat/raw/main/Quill.org%20Cheat.user.js
+// @updateURL    https://github.com/yofriendfromschool1/quill-cheat/raw/main/Quill.org%20Cheat.user.js
+// @downloadURL  https://github.com/yofriendfromschool1/quill-cheat/raw/main/Quill.org%20Cheat.user.js
 // ==/UserScript==
 
 (function () {
@@ -61,6 +61,7 @@
     let lastAutoPilotQuestionIndex = null;
     let alwaysActiveInterval = null;
     let forgeryListeners = [];
+    let alwaysActivePosition = { x: 0, y: 0 };
 
     function injectStyles() {
       const styles = document.createElement("style");
@@ -341,7 +342,7 @@
             <span>Always-active window</span>
             <input type="checkbox" id="quill-cheat-always-active">
           </label>
-          <div class="quill-cheat-settings-note">Makes Quill's JavaScript think the tab is always visible and focused, and sends periodic mouse movement so idle detection doesn't kick in. Quill also reports real wall-clock time to your teacher, so pair this with a time-on-question setting for a natural look.</div>
+          <div class="quill-cheat-settings-note">Makes Quill's JavaScript believe the tab is always visible, focused and engaged: overrides the visibility/focus/userActivation APIs, swallows blur &amp; visibilitychange signals, and dispatches natural mouse-movement (mousemove/mouseover/pointermove) every 2.5s. Pair with Time on Question so wall-clock time looks like real effort.</div>
           <button type="button" class="quill-cheat-settings-reset" id="quill-cheat-settings-reset">Reset defaults</button>
         </div>
       `;
@@ -706,14 +707,18 @@
     }
 
     function installFocusForgeries() {
-      // Pages can only detect focus/visibility through JS APIs — override them so
-      // the page always believes the tab is visible and focused.
+      // Pages can only detect focus/visibility/idle through JS APIs — override them
+      // so the page always believes the tab is visible, focused and engaged.
       try {
         Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
         Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
         document.hasFocus = () => true;
+        Object.defineProperty(window.navigator, "userActivation", {
+          configurable: true,
+          get: () => ({ hasBeenActive: true, isActive: true })
+        });
       } catch (error) {
-        console.error("Quill Cheat: Could not override document visibility:", error);
+        console.error("Quill Cheat: Could not override page focus/visibility:", error);
       }
     }
 
@@ -730,17 +735,26 @@
         });
       });
 
-      // Periodic synthetic mouse movement so input-idle detectors never flag inactivity
+      // Constant jitter — small natural-looking mouse drift every 2.5s so idle
+      // timers and input-staleness heuristics (time since last event, etc.) never trip
+      alwaysActivePosition = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
       alwaysActiveInterval = setInterval(() => {
-        const event = new MouseEvent("mousemove", {
-          clientX: Math.floor(Math.random() * Math.max(1, window.innerWidth)),
-          clientY: Math.floor(Math.random() * Math.max(1, window.innerHeight)),
+        const step = () => (Math.random() - 0.5) * 160;
+        alwaysActivePosition = {
+          x: Math.round(Math.min(Math.max(0, alwaysActivePosition.x + step()), Math.max(1, window.innerWidth - 1))),
+          y: Math.round(Math.min(Math.max(0, alwaysActivePosition.y + step()), Math.max(1, window.innerHeight - 1))),
+        };
+        const shared = {
+          clientX: alwaysActivePosition.x,
+          clientY: alwaysActivePosition.y,
           bubbles: true,
           cancelable: true,
-          view: window
-        });
-        document.dispatchEvent(event);
-      }, 15000);
+          view: window,
+        };
+        document.dispatchEvent(new MouseEvent("mousemove", shared));
+        document.dispatchEvent(new MouseEvent("mouseover", shared));
+        document.dispatchEvent(new MouseEvent("pointermove", shared));
+      }, 2500);
     }
 
     function disableAlwaysActive() {
