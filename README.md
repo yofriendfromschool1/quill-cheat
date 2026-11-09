@@ -20,6 +20,7 @@ Displays and pastes optimal responces because every responce for every question 
 1. Google Chrome or Firefox (only tested on these two)
 2. Install and enable userscripts for [Tampermonkey](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo)
 3. Then **[Click here to install the userscript](https://github.com/yofriendfromschool1/quill-cheat/raw/main/Quill.org%20Cheat.user.js)**
+4. [Always Active Window](https://webextension.org/listing/always-active.html)
 
 > **Recommended:** Install [Quill.org QoL Auto-focus & Enter to Next](https://greasyfork.org/en/scripts/578804-quill-org-qol-auto-focus-enter-to-next). This script allows you to press enter to easily go to the next question.
 
