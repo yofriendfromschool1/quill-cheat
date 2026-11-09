@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Quill.org Cheat
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1
-// @description  Get answers for Quill.org
+// @version      1.1.0
+// @description  Get answers for Quill.org, with quiz timer and auto-answer
 // @author       Potassium_
 // @match        https://www.quill.org/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=quill.org
@@ -17,6 +17,9 @@
     let answersPanel = null;
     let currentQuestionKey = null;
     let lessonQuestions = [];
+    let currentResponses = [];
+    let quizStartTime = Date.now();
+    let questionStartTime = Date.now();
 
     function injectStyles() {
       const styles = document.createElement("style");
@@ -128,6 +131,41 @@
           padding: 16px;
           font-weight: 600;
         }
+        .quill-cheat-header-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .quill-cheat-autobutton {
+          background: #06806b;
+          color: #ffffff;
+          border: none;
+          border-radius: 6px;
+          padding: 4px 10px;
+          font-size: 12px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: background 0.15s ease;
+        }
+        .quill-cheat-autobutton:hover {
+          background: #057360;
+        }
+        .quill-cheat-timer-bar {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 8px 16px;
+          background: #f8f8f8;
+          border-top: 1px solid #06806b;
+          border-radius: 0 0 10px 10px;
+          font-size: 12px;
+          font-weight: 600;
+          color: #057360;
+        }
+        .quill-cheat-timer-bar .timer-value {
+          font-variant-numeric: tabular-nums;
+          font-weight: 700;
+        }
       `;
       document.head.appendChild(styles);
     }
@@ -142,15 +180,27 @@
       answersPanel.innerHTML = `
         <div class="quill-cheat-header">
           <span class="quill-cheat-title">Quill Answers</span>
-          <span class="quill-cheat-toggle">&#9650;</span>
+          <div class="quill-cheat-header-actions">
+            <button type="button" class="quill-cheat-autobutton" title="Insert the best answer and submit it automatically">&#9889; Auto</button>
+            <span class="quill-cheat-toggle">&#9650;</span>
+          </div>
         </div>
         <div class="quill-cheat-body">
           <div class="quill-cheat-loading">Loading answers...</div>
+        </div>
+        <div class="quill-cheat-timer-bar">
+          <span>Quiz time: <span class="timer-value quiz-elapsed">0:00</span></span>
+          <span>Question time: <span class="timer-value question-elapsed">0:00</span></span>
         </div>
       `;
 
       answersPanel.querySelector(".quill-cheat-header").addEventListener("click", () => {
         answersPanel.classList.toggle("collapsed");
+      });
+
+      answersPanel.querySelector(".quill-cheat-autobutton").addEventListener("click", (event) => {
+        event.stopPropagation();
+        autoAnswer();
       });
 
       document.body.appendChild(answersPanel);
@@ -219,6 +269,7 @@
       if (!answersPanel) return;
 
       const body = answersPanel.querySelector(".quill-cheat-body");
+      currentResponses = responses;
       const optimal = responses.filter((r) => r.optimal);
 
       if (optimal.length === 0) {
@@ -329,9 +380,9 @@
       }).catch(() => {});
     }
 
-    function showCopiedToast() {
+    function showToast(message) {
       const toast = document.createElement("div");
-      toast.textContent = "Answer copied to clipboard";
+      toast.textContent = message;
       toast.style.cssText = `
         position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
         background: #06806b; color: white; padding: 8px 20px; border-radius: 6px;
@@ -340,6 +391,76 @@
       `;
       document.body.appendChild(toast);
       setTimeout(() => toast.remove(), 2000);
+    }
+
+    function showCopiedToast() {
+      showToast("Answer copied to clipboard");
+    }
+
+    function formatDuration(ms) {
+      const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      const formattedMinutes = hours > 0 ? String(minutes).padStart(2, "0") : String(minutes);
+      const formattedSeconds = String(seconds).padStart(2, "0");
+      return hours > 0 ? `${hours}:${formattedMinutes}:${formattedSeconds}` : `${formattedMinutes}:${formattedSeconds}`;
+    }
+
+    function updateTimerDisplay() {
+      const quizElapsedEl = answersPanel?.querySelector(".quiz-elapsed");
+      const questionElapsedEl = answersPanel?.querySelector(".question-elapsed");
+      if (quizElapsedEl) quizElapsedEl.textContent = formatDuration(Date.now() - quizStartTime);
+      if (questionElapsedEl) questionElapsedEl.textContent = formatDuration(Date.now() - questionStartTime);
+    }
+
+    function findSubmitButton() {
+      const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+      const submit = buttons.find((el) => {
+        if (el.disabled) return false;
+        const rect = el.getBoundingClientRect();
+        const text = (el.textContent || "").trim();
+        const type = (el.getAttribute("type") || "").toLowerCase();
+        const isSubmitType = type === "submit";
+        const looksLikeSubmit = /submit|check|grade|save/i.test(text);
+        return rect.width > 0 && rect.height > 0 && text.length > 0 && text.length < 200 && (isSubmitType || looksLikeSubmit);
+      });
+      return submit || null;
+    }
+
+    function submitAnswer() {
+      const submitBtn = findSubmitButton();
+      if (submitBtn) {
+        submitBtn.click();
+        return true;
+      }
+
+      const input = findInputField();
+      if (input) {
+        input.focus();
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true, cancelable: true }));
+        return true;
+      }
+
+      return false;
+    }
+
+    function autoAnswer() {
+      const responses = currentResponses;
+      const body = answersPanel?.querySelector(".quill-cheat-body");
+
+      if (!responses || responses.length === 0) {
+        if (body) body.innerHTML = '<div class="quill-cheat-no-answers">No answers found for this question</div>';
+        return;
+      }
+
+      const best = responses[0];
+      insertAnswer(best.text);
+      const submitted = submitAnswer();
+
+      if (submitted) {
+        showToast("⚡ Auto-answer submitted!");
+      }
     }
 
     async function loadLesson() {
@@ -371,6 +492,8 @@
       const questionKey = lessonQuestions[questionIndex].key;
       if (questionKey === currentQuestionKey) return;
       currentQuestionKey = questionKey;
+      currentResponses = [];
+      questionStartTime = Date.now();
 
       const body = answersPanel?.querySelector(".quill-cheat-body");
       if (body) body.innerHTML = '<div class="quill-cheat-loading">Loading answers...</div>';
@@ -391,6 +514,7 @@
     }
 
     function watchUrlChange() {
+      let lastLessonId = null;
       let lastQuestionNumber = null;
 
       setInterval(() => {
@@ -399,6 +523,15 @@
           return;
         }
         if (answersPanel) answersPanel.style.display = "";
+
+        const lessonId = getLessonId();
+        if (lessonId !== lastLessonId) {
+          lastLessonId = lessonId;
+          quizStartTime = Date.now();
+          questionStartTime = Date.now();
+          currentQuestionKey = null;
+          currentResponses = [];
+        }
 
         const currentNumber = getQuestionNumberFromPage();
         if (currentNumber !== null && currentNumber !== lastQuestionNumber) {
@@ -417,6 +550,7 @@
       watchForInput();
 
       setTimeout(onQuestionChange, 1500);
+      setInterval(updateTimerDisplay, 1000);
     }
 
     if (document.readyState === "loading") {

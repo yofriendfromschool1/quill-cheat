@@ -9,6 +9,11 @@
 
 Displays and pastes optimal responces because every responce for every question in every lesson is in Quill's public API.
 
+# Features
+- **Live answers** — shows the optimal answer(s) for the question you're currently on.
+- **Quiz timer** — a live timer in the panel showing how long you've been on the current quiz, plus how long you've spent on the current question.
+- **Auto Answer** — the ⚡ Auto button inserts the best answer and submits it for you in one click.
+
 # Installation
 1. Google Chrome or Firefox (only tested on these two)
 2. Install and enable userscripts for [Tampermonkey](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo)
@@ -22,6 +27,14 @@ Displays and pastes optimal responces because every responce for every question 
 2. It detects which question you're on by reading the "X of Y" counter on the page
 3. It fetches the correct answer(s) from the CMS API and displays them in a panel at the bottom of the screen
 4. Click an answer to insert it into the response box
+5. Hit ⚡ Auto to insert the best answer and submit it automatically
+
+## FAQ
+### Does the timer reset?
+Yes — the quiz timer resets when you start a new lesson and the question timer resets every time you move to a new question.
+
+### What does Auto Answer do?
+Clicks the ⚡ Auto button in the answers panel. It grabs the top (optimal) answer for the current question, inserts it into the response box, and submits it — all automatically.
 
 ## API Documentation
 > You can also do this yourself without the script, by following the steps here
