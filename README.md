@@ -32,7 +32,6 @@ A fast, cross-browser userscript for Quill.org. It shows the best known answer f
 2. Open the userscript and install it:
    - **[Install Quill.org Cheat](https://github.com/yofriendfromschool1/quill-cheat/raw/main/Quill.org%20Cheat.user.js)**
 3. Open any Quill activity. The panel appears in the bottom-right corner.
-> **Recommended:** Install [Quill.org QoL Auto-focus & Enter to Next](https://greasyfork.org/en/scripts/578804-quill-org-qol-auto-focus-enter-to-next). This script allows you to press enter to easily go to the next question.
 
 # Usage
 

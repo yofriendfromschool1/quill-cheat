@@ -1328,6 +1328,61 @@
     };
   }
 
+  // Keep the panel header in sync with the passage without re-rendering the
+  // whole body on every correction (which would trash the correction list).
+  function updateProofreaderChrome() {
+    const question = state.current && state.current.question;
+    if (!question || question.type !== "proofreader" || !panel) return;
+
+    const review = proofreaderReviewState();
+    if (!review && activityComplete()) {
+      // Don't let the proofreader stage overwrite the completion status.
+      state.finishedAt = state.finishedAt || Date.now();
+      updateTimerDisplay();
+      if (state.statusText !== "Activity complete") setStatus("Activity complete", "ready");
+      return;
+    }
+    const progress = proofreaderProgress();
+    let status = "Ready to proofread";
+    if (review) {
+      const finished = review.done && isDisabled(review.done) && (!review.total || review.index >= review.total);
+      if (finished) {
+        status = "Review complete";
+      } else {
+        status = review.total
+          ? "Reviewing corrections " + review.index + " of " + review.total
+          : "Reviewing corrections";
+      }
+    } else if (progress && progress.total) {
+      status = progress.made >= progress.total
+        ? "All " + progress.total + " edits made \u2014 get feedback"
+        : progress.made === 0
+          ? "Ready to proofread"
+          : "Proofreading \u2014 " + progress.made + " of " + progress.total + " edits";
+    }
+    if (state.statusText !== status) setStatus(status, "ready");
+
+    if (progress) {
+      const counter = panelBody && panelBody.querySelector(".qc-count");
+      const text = progress.made + " / " + progress.total + " edits";
+      if (counter && counter.textContent !== text) counter.textContent = text;
+    }
+
+    const fixAll = panelBody && panelBody.querySelector('[data-action="fix-all"]');
+    if (fixAll) {
+      const reviewDone = review && review.done && isDisabled(review.done) && (!review.total || review.index >= review.total);
+      const label = reviewDone
+        ? "Review complete"
+        : review
+          ? "Reviewing corrections"
+          : progress && progress.made >= progress.total
+            ? "Get feedback"
+            : "Fix all corrections";
+      if (fixAll.textContent !== label) fixAll.textContent = label;
+      fixAll.disabled = Boolean(review);
+    }
+  }
+
   function evidencePromptQuestion() {
     if (!state.activity || !state.activity.questions || !state.activity.questions.length) return null;
     const containers = $$("[id^='prompt-editor-']").filter(isVisible);
@@ -1925,9 +1980,27 @@
         showToast("Panel position reset");
       } else if (action === "fix-all") {
         event.stopPropagation();
-        applyAllProofreaderCorrections().then((applied) => {
-          showToast(applied ? "Fixed " + applied + " correction" + (applied === 1 ? "" : "s") : "No underlined words found");
-          if (applied) setTimeout(() => clickSubmitButton(), 250);
+        applyAllProofreaderCorrections().then(async (applied) => {
+          showToast(applied ? "Fixed " + applied + " correction" + (applied === 1 ? "" : "s") : "No underlined words found", applied ? "success" : "warn");
+          if (!applied) {
+            // Everything is already corrected; submit and open review instead.
+            if (clickSubmitButton()) {
+              await sleep(700);
+              const pending = proofreaderReviewButton();
+              if (pending) pending.click();
+            } else if (clickAdvanceButton()) {
+              showToast("Advanced");
+            }
+            updateProofreaderChrome();
+            return;
+          }
+          updateProofreaderChrome();
+          await sleep(250);
+          clickSubmitButton();
+          await sleep(800);
+          const review = proofreaderReviewButton();
+          if (review) review.click();
+          updateProofreaderChrome();
         });
       } else if (action === "fill-blanks") {
         event.stopPropagation();
@@ -2308,7 +2381,8 @@
 
     wrap.appendChild(createElement("div", "qc-activity", truncate(state.activity && state.activity.title ? state.activity.title : pageTitleFallback(), 110)));
 
-    if (question.prompt) {
+    const activityTitle = state.activity && state.activity.title ? state.activity.title : pageTitleFallback();
+    if (question.prompt && normalized(question.prompt) !== normalized(activityTitle)) {
       const prompt = createElement("div", "qc-prompt");
       prompt.textContent = truncate(question.prompt, 320);
       prompt.title = question.prompt;
@@ -2566,6 +2640,7 @@
         state.current = { index: found.index, question: found.question, token: found.token };
         renderPanel();
       }
+      if (found.question.type === "proofreader") updateProofreaderChrome();
     } finally {
       state.syncBusy = false;
     }
@@ -2708,11 +2783,62 @@
       }
 
       if (question.type === "proofreader") {
+        // Review cards are a separate stage from the passage. Handle them
+        // first so Auto works after every correction has already been made.
+        const review = proofreaderReviewState();
+        if (review) {
+          if (review.done && !isDisabled(review.done)) {
+            review.done.click();
+            showToast("Review finished", "success");
+          } else if (review.next) {
+            review.next.click();
+            showToast("Next review card");
+          } else if (review.done) {
+            state.finishedAt = state.finishedAt || Date.now();
+            updateTimerDisplay();
+            showToast("All review cards checked", "success");
+          }
+          return;
+        }
+        const reviewButton = proofreaderReviewButton();
+        if (reviewButton) {
+          reviewButton.click();
+          showToast("Opened review");
+          return;
+        }
+
+        // Welcome / instruction screens have no passage yet. Advance instead
+        // of reporting that there is nothing to correct.
+        if (!proofreaderSpans().length && !proofreaderProgress() && clickAdvanceButton()) {
+          showToast("Advanced");
+          return;
+        }
+
         const applied = await applyAllProofreaderCorrections();
         await sleep(250);
+        if (!applied) {
+          // Nothing left underlined. The passage may already have all edits,
+          // so try Get feedback and then open the review prompt.
+          if (clickSubmitButton()) {
+            await sleep(700);
+            const pendingReview = proofreaderReviewButton();
+            if (pendingReview) {
+              pendingReview.click();
+              showToast("Opened review");
+            } else {
+              showToast("Submitted \u2014 check the page for feedback");
+            }
+          } else {
+            showToast("All corrections are already applied", "success");
+          }
+          return;
+        }
         const submitted = clickSubmitButton();
-        showToast(applied ? "Fixed " + applied + " correction" + (applied === 1 ? "" : "s") : "No underlined words found", applied ? "success" : "warn");
-        if (!submitted && applied) setTimeout(() => clickSubmitButton(), 250);
+        showToast("Fixed " + applied + " correction" + (applied === 1 ? "" : "s") + (submitted ? " \u2014 opening review" : ""), "success");
+        if (!submitted) setTimeout(() => clickSubmitButton(), 250);
+        await sleep(800);
+        const pendingReview = proofreaderReviewButton();
+        if (pendingReview) pendingReview.click();
         return;
       }
 
@@ -2770,6 +2896,7 @@
     } finally {
       autoAnswerBusy = false;
       updateTimerDisplay();
+      updateProofreaderChrome();
     }
   }
 
