@@ -7,79 +7,138 @@
  \___\_\\__,_|_||_|_|    \_____|_| |_|\___| \__,__|  \__|
 </pre>
 
-Displays and pastes optimal responces because every responce for every question in every lesson is in Quill's public API.
+A fast, cross-browser userscript for Quill.org. It shows the best known answer for the question you're on, can paste and submit it for you, and can auto-pilot a whole activity from start to finish.
+
+> **Note:** this only works because Quill publishes its lesson and answer data in its own public API. Quill can change that API at any time. This project is for educational/personal use; use it responsibly and follow your school's rules.
 
 # Features
-- **Live answers** — shows the optimal answer(s) for the question you're currently on.
-- **Quiz timer** — a live timer in the panel showing how long you've been on the current quiz, plus how long you've spent on the current question.
-- **Auto Answer** — the ⚡ Auto button inserts the best answer and submits it for you in one click.
-- **Auto-pilot (🤖 Loop)** — a toggle that auto-answers every question and clicks Next/Continue until the lesson is complete, then stops itself.
-- **Loop settings (⚙)** — set a min/max "time on question" so the loop waits a human-like random time per question instead of speeding through, and toggle "Always-active window" so Quill's JavaScript sees the tab as visible/focused at all times (like Canvashack).
+
+- **Live answers** — best answer(s) for the current question, sorted by Quill's own usage counts.
+- **One-click answer** — click a card to insert it, or press **Auto** to insert and submit.
+- **Auto-pilot** — start it manually and it will read, highlight, answer, submit, advance and finish the activity, then stop itself.
+- **Works across Quill** — Connect, Grammar (including fill-in-the-blank), Proofreader, Diagnostic, Reading for Evidence, and generic activity routes.
+- **Smart detection** — handles hash routing, question transitions, feedback screens, intro/title cards, language pickers and end-of-activity surveys.
+- **Polished panel** — draggable, collapsible, light/dark/auto theme, live quiz/question timers, status and toasts.
+- **Always-active mode** — the page sees the tab as visible and focused even when it isn't.
+- **Human-like pacing** — optional random min/max delay per question.
+- **No external permissions** — `@grant none`, standard DOM APIs, works in Tampermonkey, Violentmonkey, Userscripts and other managers.
 
 # Installation
-1. Google Chrome or Firefox (only tested on these two)
-2. Install and enable userscripts for [Tampermonkey](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo)
-3. Then **[Click here to install the userscript](https://github.com/yofriendfromschool1/quill-cheat/raw/main/Quill.org%20Cheat.user.js)**
-4. [Always Active Window](https://webextension.org/listing/always-active.html)
 
-> **Recommended:** Install [Quill.org QoL Auto-focus & Enter to Next](https://greasyfork.org/en/scripts/578804-quill-org-qol-auto-focus-enter-to-next). This script allows you to press enter to easily go to the next question.
+1. Install a userscript manager for your browser:
+   - [Tampermonkey](https://www.tampermonkey.net/) (Chrome, Edge, Firefox, Safari, Opera)
+   - [Violentmonkey](https://violentmonkey.github.io/) (Chrome, Edge, Firefox)
+   - [Userscripts](https://github.com/quoid/userscripts) (Safari)
+2. Open the userscript and install it:
+   - **[Install Quill.org Cheat](https://github.com/yofriendfromschool1/quill-cheat/raw/main/Quill.org%20Cheat.user.js)**
+3. Open any Quill activity. The panel appears in the bottom-right corner.
 
-# Structure / Documentation
-## How it works
-1. The script reads the lesson ID from the URL and fetches question data from the Quill API
-2. It detects which question you're on by reading the "X of Y" counter on the page
-3. It fetches the correct answer(s) from the CMS API and displays them in a panel at the bottom of the screen
-4. Click an answer to insert it into the response box
-5. Hit ⚡ Auto to insert the best answer and submit it automatically
-6. Or toggle 🤖 Loop to answer every question and advance through the whole lesson automatically
+# Usage
+
+- Click **Auto** (or press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>) to answer the current question.
+- Click **Loop** (or press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd>) to start or stop auto-pilot.
+- Click an answer card to insert that answer without submitting.
+- Press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> to collapse/expand, <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Q</kbd> to hide/show the panel, and <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> to open settings.
+- Drag the header to move the panel; the position is remembered.
+- Open **⚙ Settings** to change the theme, per-question delay, always-active mode, or reset the panel.
+
+## Auto-pilot behavior
+
+Auto-pilot is deliberately **manual-start**. It:
+
+1. Answers each question with the best available answer and submits it.
+2. Reads the feedback and retries with the next strong answer if Quill rejects the first one.
+3. Clicks Next/Continue/Done through feedback, reflection and title screens.
+4. Handles Proofreader corrections and review cards.
+5. Handles Reading for Evidence highlights, prompts, revisions and the final survey.
+6. Stops on activity completion, when you change activities, or if it gets stuck instead of clicking randomly.
+
+## Supported tools
+
+| Tool | Support |
+| --- | --- |
+| Connect | Full auto-pilot |
+| Grammar | Full auto-pilot (multiple choice, written responses, fill-in-the-blank) |
+| Proofreader | Full auto-fix and review. Note: Quill disables the final **Done** button for anonymous proofreader plays, so auto-pilot stops after the last review card. |
+| Diagnostic | Full auto-pilot through the placement activity |
+| Reading for Evidence | Full auto-pilot: highlights, 3 prompts, revisions, survey |
+| Lessons | Panel detects teacher-led lessons and explains that Quill publishes no answer key for them |
+| Other `/play/...` activities | Generic fallback using Quill's activity API |
+
+# How it works
+
+1. The script reads the lesson/activity id from the URL and determines which Quill tool you're in.
+2. It fetches the lesson structure from Quill's public API and resolves the current question from the page.
+3. Answers come from the CMS response data embedded in the lesson and/or `https://cms.quill.org/questions/{key}/responses` and `.../multiple_choice_options`.
+4. Proofreader corrections are parsed from passage markers such as `{+correct-wrong|concept}` and matched against the underlined words in the DOM.
+5. Fill-in-the-blank answers are aligned word-by-word against the prompt so each blank gets the right words.
+6. Reading for Evidence prompts are mapped by their `#prompt-editor-{promptId}` container, so a new prompt can never be filled with the previous prompt's answer.
+7. The panel is rendered in a Shadow DOM so Quill's CSS can't break it.
 
 ## FAQ
+
 ### Does the timer reset?
-Yes — the quiz timer resets when you start a new lesson and the question timer resets every time you move to a new question.
+The quiz timer resets when you start a new activity; the question timer resets on each new question, and both freeze when the activity is complete.
 
-### What does Auto Answer do?
-Clicks the ⚡ Auto button in the answers panel. It grabs the top (optimal) answer for the current question, inserts it into the response box, and submits it — all automatically.
+### Does auto-pilot start by itself?
+No. You have to press **Loop** on each activity. This avoids accidentally running through something you opened to read.
 
-### What does 🤖 Loop do?
-Toggles auto-pilot. While it's on, every ~900ms the script checks the page: if it's a question it inserts the optimal answer and submits it (multiple choice included), and if it's a feedback or intro screen it clicks the advance button (Next, Continue, Begin, etc.). It never clicks Save and Exit, and it stops itself automatically when the lesson is complete or it gets stuck.
+### What does Auto do?
+It inserts the best answer for the current question and submits it. If there is no question yet, it advances past intro/title screens.
 
-### What are the ⚙ Loop settings?
-- **Time on question min/max** — when set, the loop waits a *random* time between min and max seconds per question before answering (both 0 = instant, the default). Use this when you want the activity to take a natural amount of time on Quill rather than being finished in under a minute.
-- **Always-active window** — makes the page always report `document.hidden = false` / `visibilityState = 'visible'` / `document.hasFocus() = true`, blocks `blur`/`visibilitychange` events in the capture phase, and dispatches a synthetic mouse movement every 15 seconds so idle detection doesn't flag you. Honest caveat: a userscript can't force OS-level window focus — this only neutralizes what the page's JavaScript can detect. Quill also tracks real wall-clock time, so pair this setting with a time-on-question setting for a natural look. Settings persist in localStorage across reloads.
+### What is always-active mode?
+It overrides the page's view of `document.hidden`, `document.visibilityState`, `document.hasFocus()`, focus/blur and visibility events, and sends a lightweight heartbeat. It does **not** change your operating system's focus; it only affects what Quill's JavaScript can detect. Quill still records real wall-clock time, so use the time-on-question setting if you care about pacing.
 
-## API Documentation
-> You can also do this yourself without the script, by following the steps here
-### Lesson URL Pattern
-```
-https://www.quill.org/connect/#/play/lesson/{lessonId}?activities={activityIndex}&student={studentId}
-```
-- `lessonId` — the lesson identifier (e.g. `-L1sW9oOPAuLTPCWNbTI`)
+### Why did auto-pilot stop?
+It stops on purpose when:
+- the activity is complete,
+- you changed activities,
+- it detects a teacher-led lesson (no public answer key),
+- both published Evidence examples were rejected,
+- or it has been stuck for too long.
 
-### Step 1 — Get lesson data
+The status line in the panel tells you why.
+
+### Are answers always correct?
+No. Quill's accepted answers change over time, and some prompts are graded by AI. The script uses the highest-usage optimal answers and falls back to the next strong answer, but occasional manual review may still be needed.
+
+# API reference
+
+You can reproduce the core behavior without the script.
+
+## Lesson data
+
 ```
 https://www.quill.org/api/v1/lessons/{lessonId}.json
 ```
-Returns a JSON object with a `questions` array. Each question has a `key` field used in Step 2.
 
-Example response structure:
+Returns the lesson name and a `questions` array. Each entry has a `key` used below.
+
 ```json
 {
   "name": "That & Which 2",
   "questions": [
-    { "key": "-Kvhp3xrJYkJ4FPM5Orj", "questionType": "questions" },
-    { "key": "-KvhpAQdZBZFPhjsF49Z", "questionType": "questions" }
+    { "key": "-Kvhp3xrJYkJ4FPM5Orj", "questionType": "questions" }
   ]
 }
 ```
-- `questions[0].key` = first question's key
 
-### Step 2 — Get answers for a question
+## Answers
 
-#### Written Responses
+Written responses:
+
 ```
 https://cms.quill.org/questions/{questionKey}/responses
 ```
-Returns an array of response objects:
+
+Multiple-choice options:
+
+```
+https://cms.quill.org/questions/{questionKey}/multiple_choice_options
+```
+
+Both return arrays of answers:
+
 ```json
 [
   {
@@ -91,13 +150,23 @@ Returns an array of response objects:
   }
 ]
 ```
+
 - `text` — the answer text
-- `optimal` — `true` if this is a correct/accepted answer
-- `count` — how many times this response has been submitted
+- `optimal` — `true` for an accepted answer
+- `count` — how many times the answer has been submitted
 
-#### Multiple Choice Responses
-```
-https://cms.quill.org/questions/{questionKey}/multiple_choice_options
-```
-Returns the same format as written responses.
+## Reading for Evidence
 
+```
+https://www.quill.org/api/v1/evidence/activities/{uid}
+```
+
+The response contains `prompts`, each with a `conjunction`, `text`, `first_strong_example` and `second_strong_example`. Auto-pilot fills the sentence stem plus one strong example.
+
+## Proofreader
+
+```
+https://www.quill.org/api/v1/lessons/{uid}.json
+```
+
+Proofreader passages contain markers in the form `{+correct-wrong|concept}`; the script parses and applies those corrections.

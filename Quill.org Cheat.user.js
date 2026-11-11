@@ -240,6 +240,14 @@
     const sessionId = param("session", "session_id", "activity_session_id");
     const lowerPath = (pathname + "/" + hashPath).toLowerCase();
 
+    // Stay out of dashboards, libraries and marketing pages. Only activity
+    // play routes (plus the Lessons customizer) get a panel.
+    const isPlayRoute = /(^|\/)play($|\/)/.test(lowerPath);
+    const isLessonCustomize = segments[0] === "customize" && toolPath === "lessons";
+    if (!isPlayRoute && !isLessonCustomize && !/\/activity_sessions\//.test(lowerPath)) {
+      return null;
+    }
+
     let tool = null;
     let lessonId = null;
 
@@ -1496,6 +1504,7 @@
     attempts: 0,
     questionStartedAt: Date.now(),
     quizStartedAt: Date.now(),
+    finishedAt: 0,
     delayMs: 0,
     statusText: "Ready",
     statusTone: "idle",
@@ -2125,8 +2134,9 @@
     if (!panel) return;
     const quiz = panel.querySelector(".qc-quiz-time");
     const question = panel.querySelector(".qc-q-time");
-    if (quiz) quiz.textContent = formatDuration(Date.now() - state.quizStartedAt);
-    if (question) question.textContent = formatDuration(Date.now() - state.questionStartedAt);
+    const end = state.finishedAt || Date.now();
+    if (quiz) quiz.textContent = formatDuration(end - state.quizStartedAt);
+    if (question) question.textContent = formatDuration(end - state.questionStartedAt);
   }
 
   function renderSkeleton() {
@@ -2261,7 +2271,6 @@
       const wrap = document.createDocumentFragment();
       const metaRow = createElement("div", "qc-meta");
       metaRow.appendChild(createElement("span", "qc-badge", "Complete"));
-      metaRow.appendChild(createElement("span", "qc-count", formatDuration(Date.now() - state.quizStartedAt)));
       wrap.appendChild(metaRow);
       wrap.appendChild(createElement("div", "qc-activity", state.activity ? state.activity.title : "Activity complete"));
       wrap.appendChild(createElement("div", "qc-message", "Activity complete. Nice work!"));
@@ -2581,6 +2590,7 @@
     try {
       if (state.context.results) {
         state.loadingActivity = false;
+        state.finishedAt = state.finishedAt || Date.now();
         state.activity = { tool: state.context.tool, title: pageTitleFallback(), questions: [], teacherLed: false };
         renderPanel(true);
         setStatus("Activity complete", "ready");
@@ -2624,8 +2634,16 @@
     if (!changed && !force) return;
     if (changed && state.autoPilot) stopAutoPilot("activity changed", true);
     if (changed) {
-      state.quizStartedAt = Date.now();
-      state.questionStartedAt = Date.now();
+      // The completion screen changes the route signature too; keep the real
+      // quiz/question start times so the panel freezes at the actual elapsed
+      // time instead of resetting to 0:00.
+      if (!context.results) {
+        state.quizStartedAt = Date.now();
+        state.questionStartedAt = Date.now();
+        state.finishedAt = 0;
+      } else {
+        state.finishedAt = state.finishedAt || Date.now();
+      }
       state.attempts = 0;
       state.evidenceIndex = 0;
       state.evidenceAnswerIndex = 0;
@@ -2666,6 +2684,8 @@
     try {
       await syncNow(true);
       if (activityComplete()) {
+        state.finishedAt = state.finishedAt || Date.now();
+        updateTimerDisplay();
         setStatus("Activity complete", "ready");
         showToast("This activity is already complete", "success");
         return;
@@ -2794,6 +2814,8 @@
         }
         // Anonymous proofreader plays disable the final Done button on purpose.
         if (!review.total || review.index >= review.total) {
+          state.finishedAt = state.finishedAt || Date.now();
+          updateTimerDisplay();
           stopAutoPilot("Proofreader review complete \ud83c\udf89", true);
           showToast("All edits reviewed \u2014 anonymous proofreader activities end here", "success");
         }
@@ -2999,6 +3021,8 @@
     autoAnswerBusy = true;
     try {
       if (activityComplete()) {
+        state.finishedAt = state.finishedAt || Date.now();
+        updateTimerDisplay();
         stopAutoPilot("activity complete \ud83c\udf89");
         return;
       }
@@ -3334,6 +3358,11 @@
   }
 
   function init() {
+    try {
+      if (window.top !== window.self) return;
+    } catch (_) {
+      return;
+    }
     if (!hostIsQuill()) return;
     syncAlwaysActive();
     document.addEventListener("keydown", onHotkey, true);
